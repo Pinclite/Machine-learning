@@ -328,9 +328,12 @@ knn.eval
 library(rpart)
 library(rpart.plot)
 library(e1071)
+library(caret)
 
 # tree1 - jednostavna predikcija (default parametar kompleksnosti)
 tree1 = rpart(Income~., data = adults.tree, method = "class")
+tree1
+rpart.plot(tree1)
 tree1.pred = predict (object = tree1, newdata = adults.test, type = "class")
 
 # Matrica konfuzije
@@ -351,6 +354,9 @@ tree2.cv
 plot(tree2.cv)
 # najbolje cp = 0.001 (ista vrednost kao i default)
 
+# Ispitivanje procenjene znacajnosti atributa
+varImp(tree1)
+
 #---------------NAIVNI BAJES------------------
 library(bnlearn)
 library(ggplot2)
@@ -358,10 +364,14 @@ library(e1071)
 library(caret)
 library(pROC)
 
+# Za algoritam naivnog Bajesa bice iskoriscen skup podataka bez dummy varijabli radi postizanja boljih rezultata
+adults.nb = adults
+
 summary(adults.nb)
+str(adults.nb)
 
 # Provera raspodele numerickih atributa
-apply (X = adults.nb[c(1:5000),c(1,11,50)], MARGIN = 2, FUN = shapiro.test)
+apply (X = adults.nb[c(1:5000),c(1,3,10)], MARGIN = 2, FUN = shapiro.test)
 
 # Vrsi se diskretizacija, jer nijedan od navedenih atributa ne podleze normalnoj raspodeli
 to.discretize = c("Age", "Education.num", "Hours.per.week")
@@ -369,20 +379,33 @@ adults.nb$Age = as.numeric(adults.nb$Age)
 adults.nb$Education.num = as.numeric(adults.nb$Education.num)
 adults.nb$Hours.per.week = as.numeric(adults.nb$Hours.per.week)
 
-discretized = discretize(data = adults.nb[,to.discretize], method = 'quantile', breaks = c(5,5,3))
+discretized = discretize(data = adults.nb[,to.discretize], method = 'quantile', breaks = c(5,4,2))
 adults.nb$Age = discretized$Age
 adults.nb$Education.num = discretized$Education.num
 adults.nb$Hours.per.week = discretized$Hours.per.week
 
+# Atributi capital gain i Capital loss se transformisu u faktor varijable, pri tom se vrednostima vecim od 0 dodeljuje 1
+adults.nb$Capital.gain = ifelse(adults.nb$Capital.gain > 0, yes = 1, no = 0)
+adults.nb$Capital.loss = ifelse(adults.nb$Capital.loss > 0, yes = 1, no = 0)
+adults.nb$Capital.gain = as.factor(adults.nb$Capital.gain)
+adults.nb$Capital.loss = as.factor(adults.nb$Capital.loss)
+
 str(adults.nb)
 
+# Kreiranje trening i test skupova podataka
+set.seed(5)
+train.indices = createDataPartition(adults.nb$Income, p = 0.8, list = FALSE)
+train.adults.nb = adults.nb[train.indices,]
+test.adults.nb = adults.nb[-train.indices,]
+
+
 # Naive Bayes algoritam (formiranje modela i predikcija na osnovu njega) - default vrednost parametra threshold
-nb1 = naiveBayes(Income~., data = adults.nb)
+nb1 = naiveBayes(Income~., data = train.adults.nb)
 nb1
-nb1.pred = predict(nb1, newdata = adults.test, type = 'class')
+nb1.pred = predict(nb1, newdata = test.adults.nb, type = 'class')
 
 # Matrica konfuzije
-nb1.cm = table (true = adults.test$Income, predicted = nb1.pred)
+nb1.cm = table (true = test.adults.nb$Income, predicted = nb1.pred)
 nb1.cm
 
 # Evaluacione metrike
@@ -392,34 +415,34 @@ nb1.eval
 
 
 # Poboljsani model (ROC kriva) - optimalna vrednost parametra threshold
-nb2 = naiveBayes(Income~., data = adults.nb)
-nb2.pred = predict(nb2, newdata = adults.test, type = "raw")
+nb2 = naiveBayes(Income~ ., data = adults.nb)
+nb2.pred = predict(nb2, newdata = test.adults.nb, type = "raw")
 nb2.pred
 
 # Formiranje ROC krive
-nb2.roc = roc(response = as.numeric(adults.test$Income), predictor = nb2.pred[,1], levels = c(2,1))
+nb2.roc = roc(response = as.numeric(test.adults.nb$Income), predictor = nb2.pred[,2])
 nb2.roc
 nb2.roc$auc
-# AUC = 0.6237
+# AUC = 0.6232
 
 # Iscrtavanjem ROC krive dolazi se do optimalne vrednosti parametra threshold
 par(mfrow = c(1,1))
 plot.roc(nb2.roc, print.thres = TRUE, print.thres.best.method = "youden")
 # youden - maksimizira vrednost specificity + sensitivity (podjednaka vaznost tacnosti predvidjanja pozitivne i negativne klase)
-# sensitivity = 0.671, specificity = 0.914, best threshold = 0.922
+# sensitivity = 0.841, specificity = 0.757, best threshold = 0.301
 
 # Dodela klasa na osnovu izracunatih verovatnoca
-nb2.pred2 = ifelse (test = nb2.pred[,1] < 0.390, yes = ">50K", no = "<=50K")
+nb2.pred2 = ifelse (test = nb2.pred[,2] >= 0.301, yes = ">50K", no = "<=50K")
 nb2.pred2 = as.factor(nb2.pred2)
 
 # Matrica konfuzije
-nb2.cm2 = table(true = adults.test$Income, predicted = nb2.pred2)
+nb2.cm2 = table(true = test.adults.nb$Income, predicted = nb2.pred2)
 nb2.cm2
 
 # Evaluacione metrike
 nb2.eval = compute.eval.metrics(nb2.cm2)
 nb2.eval = round(nb2.eval,4)
-nb2.eval
+nb2.evaltest.adults.nb
 
 #---------------LOGISTICKA REGRESIJA------------------
 library(car)
@@ -471,8 +494,40 @@ glm.eval = round(glm.eval,4)
 glm.eval
 
 
+# Kada se iz modela glm.fit3 izbace svi atributi ciji je nivo znacaja izuzetno nizak (p-vrednost veca od 0.05), 
+# ostaju 4 varijable na osnovu kojih se formira novi model
+glm.fit4 = glm(Income ~ Age + Education.num + Marital.status.Married.AF.spouse +
+                 Marital.status.Married.spouse.absent + Marital.status.Separated + Occupation.Adm.clerical +
+                 Occupation.Craft.repair + Occupation.Exec.managerial +
+                 Occupation.Farming.fishing + Occupation.Handlers.cleaners +
+                 Occupation.Other.service + Occupation.Priv.house.serv + Occupation.Prof.specialty +
+                 Occupation.Protective.serv + Occupation.Sales + Occupation.Tech.support + Relationship.Other.relative +
+                 Relationship.Own.child + Sex.Female + Capital.loss.0 + Capital.loss.155..1740 +
+                 Capital.loss.1740..1980 + Hours.per.week, data = adults.logreg, family = binomial)
+glm.fit4
+summary(glm.fit4)
+
+# Predvidjanje verovatnoca na osnovu formiranog modela
+glm.probs2 = predict(glm.fit4, newdata = adults.test, type = "response")
+glm.probs2
+
+# Dodela klasa na osnovu dobijenih verovatnoca
+glm.pred2 = ifelse(glm.probs2 < 0.5, "<=50K", ">50K")
+
+# Matrica konfuzije
+glm.cm2 = table (true = adults.test$Income, predicted = glm.pred2)
+glm.cm2
+
+# Evaluacione metrike
+glm.eval2 = compute.eval.metrics(glm.cm2)
+glm.eval2 = round(glm.eval2,4)
+glm.eval2
+
+# Ispitivanje znacaja atributa
+varImp(glm.fit4, scale = FALSE)
+
 #-------------REZULTATI----------------
 # Tabela sa konacnim rezultatima za svaki od modela
-results = data.frame(rbind(knn.eval, tree1.eval, nb1.eval, nb2.eval, glm.eval), 
+results = data.frame(rbind(knn.eval, tree1.eval, nb1.eval, nb2.eval, glm.eval2), 
                      row.names = c("knn", "tree", "nb1", "nb2", "logreg"))
 results
