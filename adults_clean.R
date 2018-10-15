@@ -442,7 +442,7 @@ nb2.cm2
 # Evaluacione metrike
 nb2.eval = compute.eval.metrics(nb2.cm2)
 nb2.eval = round(nb2.eval,4)
-nb2.evaltest.adults.nb
+nb2.eval
 
 #---------------LOGISTICKA REGRESIJA------------------
 library(car)
